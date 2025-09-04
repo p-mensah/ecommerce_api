@@ -39,8 +39,7 @@ app = FastAPI()
 
 #  products
 products = [
-    {
-        "id": 1,"name": "watch","description": "rolex","price": 1000,"image": "........",},
+    {"id": 1,"name": "watch","description": "rolex","price": 1000,"image": "........",},
     {"id": 2,"name": "shirt ","description": " Gucci","price": 200,"image": ".......",},
     {"id": 3,"name": "sneakers ","description": "New Balance ","price": 139,"image": ".......",
     },
@@ -155,4 +154,5 @@ def checkout(user_id: int):
             })
             subtotal += product["price"] * item["quantity"]
     return {"order_summary": {"cart_items": cart_items, "total": subtotal}}
+
 
