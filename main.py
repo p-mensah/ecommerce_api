@@ -1,158 +1,179 @@
-# FastAPI E-Commerce
-# 1. Setup
-# ● Install FastAPI.
-# ● Create a simple main.py with a root endpoint:
-# ○ GET / → return "Welcome to our E-commerce API"
-
-# 2. Products
-# ● Create a list of sample products in Python (id, name, description, price, image).
-# ● Implement routes:
-# ○ GET /products → return all products.
-# ○ GET /products/{id} → return details of one product (use id to search in the
-# list).
-
-# 3. Users (Basic Auth Simulation)
-# ● Create a list to store users (id, username, email, password).
-# ● Routes:
-# ○ POST /register → accept user details and add to the list.
-# ○ POST /login → check username/email + password, return "Login
-# successful" or "Invalid credentials".
-
-# 4. Cart
-# ● Use a dictionary to simulate carts: {user_id: [ {product_id, quantity}, … ] }.
-# ● Routes:
-# ○ POST /cart → add product + quantity to a user’s cart.
-# ○ GET /cart/{user_id} → return the items in that user’s cart.
-
-
-# 5. Checkout
-# ● Calculate the subtotal (price * quantity) for each cart item.
-# ● Add them together for a total.
-# ● Route:
-# ○ POST /checkout/{user_id} → return an order summary (cart items + total).
-
-
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+from pymongo import MongoClient
+from bson import ObjectId
 
+# Create a FastAPI application
 app = FastAPI()
 
-#  products
-products = [
-    {"id": 1,"name": "watch","description": "rolex","price": 1000,"image": "........",},
-    {"id": 2,"name": "shirt ","description": " Gucci","price": 200,"image": ".......",},
-    {"id": 3,"name": "sneakers ","description": "New Balance ","price": 139,"image": ".......",
-    },
-]
+# Define the MongoDB connection string
+connection_string = (
+    "mongodb+srv://ecommerce_api:ecommerce_api@grow-cohort6.safmckr.mongodb.net/"
+)
 
-#  users
-users = [
-    {"id": 1, "username": "Peter", "email": "peter@mest.com", "password": "admin123"},
-    {"id": 2, "username": "Kwame", "email": "kwame@mest.com", "password": "admin123"},
-]
+# Create a MongoDB client
+client = MongoClient(connection_string)
 
-#  carts
-carts = {}
+# Select the database
+db = client["ecommerce"]
 
 
-# Define a Pydantic model for user registration
-class UserRegistration(BaseModel):
-    username: str
+# Define the user model
+class User(BaseModel):
+    name: str
     email: str
     password: str
 
 
-# Define a Pydantic model for cart item
+# Define the product model
+class Product(BaseModel):
+    name: str
+    description: str
+    price: float
+    stock: int
+
+
+# Define the cart item model
 class CartItem(BaseModel):
-    product_id: int
+    product_id: str
     quantity: int
 
 
-# home endpoint
-@app.get("/")
+# User Flow
+@app.get("/", tags=["Home"])
 def home_page():
     return {"message": "Welcome to our E-commerce API"}
 
 
-# Product endpoints
+@app.post("/register")
+def register_user(user: User):
+    users_collection = db["users"]
+    users_collection.insert_one(user.dict())
+    user_id = str(users_collection.find_one({"email": user.email})["_id"])
+    return {"message": "User registered successfully", "user_id": user_id}
+
+
+@app.post("/login")
+def login_user(user: User):
+    users_collection = db["users"]
+    user_doc = users_collection.find_one(
+        {"email": user.email, "password": user.password}
+    )
+    if user_doc:
+        user_id = str(user_doc["_id"])
+        return {"message": "User logged in successfully", "user_id": user_id}
+    raise HTTPException(status_code=401, detail="Invalid email or password")
+
+
 @app.get("/products")
-def get_products():
+def fetch_all_available_products():
+    """Fetch all available products"""
+    products_collection = db["products"]
+    products = list(products_collection.find())
+    for product in products:
+        product["_id"] = str(product["_id"])
     return {"products": products}
 
 
 @app.get("/products/{product_id}")
-def get_product(product_id: int):
-    for product in products:
-        if product["id"] == product_id:
-            return {"product": product}
-    return {"error": "Product not found"}
+def get_product(product_id: str):
+    """Fetch product by ID"""
+    products_collection = db["products"]
+    product = products_collection.find_one({"_id": ObjectId(product_id)})
+    if product:
+        product["_id"] = str(product["_id"])
+        return {"product": product}
+    raise HTTPException(status_code=404, detail="Product not found")
 
 
-# User endpoints
-@app.post("/register")
-def register_user(user: UserRegistration):
-    if any(u["username"] == user.username or u["email"] == user.email for u in users):
-        return {"error": "User already exists"}
-    
-    new_user = {"id": len(users) + 1,"username": user.username,"email": user.email, "password": user.password,}
-    users.append(new_user)
-    return {"message": "User registered successfully"}
-
-
-#login endpoint
-
-@app.post("/login")
-def login_user(username: str, password: str):
-    # Create a new user if they don't exist
-    existing_user = next((user for user in users if user["username"] == username), None)
-    if existing_user is None:
-        users.append(
-            {"id": len(users) + 1,"username": username,"email": "","password": password,})
-        return {"message": "Login successful"}
-    
-    # Check if the password is correct
-
-    elif existing_user["password"] == password:
-        return {"message": "Login successful"}
-    else:
-        return {"error": "Invalid password"}
-
-
-# Cart endpoints
-@app.post("/cart")
-def add_to_cart(user_id: int, item: CartItem):
-    if user_id not in carts:
-        carts[user_id] = []
-    carts[user_id].append({"product_id": item.product_id, "quantity": item.quantity})
+@app.post("/cart/{user_id}")
+def add_to_cart(user_id: str, item: CartItem):
+    carts_collection = db["carts"]
+    user_obj_id = ObjectId(user_id)
+    cart = carts_collection.find_one({"user_id": user_obj_id})
+    if not cart:
+        carts_collection.insert_one({"user_id": user_obj_id, "items": []})
+    carts_collection.update_one(
+        {"user_id": user_obj_id}, {"$push": {"items": item.dict()}}
+    )
     return {"message": "Item added to cart"}
 
 
 @app.get("/cart/{user_id}")
-def get_cart(user_id: int):
-    if user_id not in carts:
-        return {"error": "Cart not found"}
-    return {"cart": carts[user_id]}
+def get_cart(user_id: str):
+    from bson import ObjectId
 
+    carts_collection = db["carts"]
+    cart = carts_collection.find_one({"user_id": ObjectId(user_id)})
+    if not cart:
+        return {"cart": {"products": []}}
 
-
-# Checkout endpoint
-@app.post("/checkout/{user_id}")
-def checkout(user_id: int):
-    if user_id not in carts:
-        return {"error": "Cart not found"}
-    cart_items = []
-    subtotal = 0
-    for item in carts[user_id]:
-        product = next((p for p in products if p["id"] == item["product_id"]), None)
+    products = []
+    for item in cart.get("items", []):
+        product = db["products"].find_one({"_id": ObjectId(item["product_id"])})
         if product:
-            cart_items.append({
-                "product_name": product["name"],
-                "product_description": product["description"],
-                "product_price": product["price"],
-                "quantity": item["quantity"],
-                "total": product["price"] * item["quantity"]
-            })
-            subtotal += product["price"] * item["quantity"]
-    return {"order_summary": {"cart_items": cart_items, "total": subtotal}}
+            subtotal = product["price"] * item["quantity"]
+            products.append(
+                {
+                    "product_id": str(product["_id"]),
+                    "name": product["name"],
+                    "description": product["description"],
+                    "quantity": item["quantity"],
+                    "unit_price": product["price"],
+                    "subtotal": subtotal,
+                }
+            )
+    return {"cart": {"products": products}}
 
 
+@app.post("/checkout/{user_id}")
+def checkout(user_id: str):
+    carts_collection = db["carts"]
+    cart = carts_collection.find_one({"user_id": ObjectId(user_id)})
+    if cart:
+        if "items" in cart:
+            orders_collection = db["orders"]
+            order = {"user_id": ObjectId(user_id), "products": [], "total": 0}
+            for item in cart["items"]:
+                product_collection = db["products"]
+                product = product_collection.find_one(
+                    {"_id": ObjectId(item["product_id"])}
+                )
+                if product:
+                    order["products"].append(
+                        {"product_id": item["product_id"], "quantity": item["quantity"]}
+                    )
+                    order["total"] += product["price"] * item["quantity"]
+            order_id = orders_collection.insert_one(order).inserted_id
+            return {
+                "message": "Order placed successfully",
+                "order_id": str(order_id),
+                "total ₵": order["total"],
+            }
+        else:
+            return {"message": "Cart is empty"}
+    return {"message": "Cart not found"}
+
+
+# Admin Flow
+@app.post("/add_product", tags=["Admin"])
+def add_product(product: Product):
+    products_collection = db["products"]
+    products_collection.insert_one(product.dict())
+    return {"message": "Product added successfully"}
+
+
+@app.put("/products/{product_id}", tags=["Admin"])
+def update_product(product_id: str, product: Product):
+    products_collection = db["products"]
+    products_collection.update_one(
+        {"_id": ObjectId(product_id)}, {"$set": product.dict()}
+    )
+    return {"message": "Product updated successfully"}
+
+
+@app.delete("/products/{product_id}", tags=["Admin"])
+def delete_product(product_id: str):
+    products_collection = db["products"]
+    products_collection.delete_one({"_id": ObjectId(product_id)})
+    return {"message": "Product deleted successfully"}
